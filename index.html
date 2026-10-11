@@ -164,7 +164,7 @@ async function branchHead() {
 
 // ---- Loading
 async function load() {
-	$("#detail").innerHTML = '<p class="meta">Loading the game text from GitHub…</p>'
+	notice('<p class="meta">Loading the game text from GitHub…</p>')
 	await branchHead()
 	// Bring other threads' changes on main in, so the desk always shows the game as it is.
 	const m = await gh("/merges", { method: "POST", body: { base: BRANCH, head: BASE, commit_message: "Text Desk: bring in main" }, ok: [201, 204, 409] })
@@ -177,6 +177,7 @@ async function load() {
 	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB)
 	const texts = await Promise.all(want.map((p) => blobText(S.tree.get(p))))
 	S.files = Object.fromEntries(want.map((p, i) => [p, texts[i]]))
+	if (!S.sel) $("#main").dataset.view = "list"
 	build()
 }
 
@@ -524,9 +525,13 @@ async function play(btn, path) {
 	}
 }
 
+// Setup, loading and errors show in the right pane; on a phone that pane is hidden while
+// the list shows, so switch to it (the list is empty until the text has loaded anyway).
+function notice(html) { $("#detail").innerHTML = html; $("#main").dataset.view = "detail" }
+
 function showError(e) {
 	const auth = e.status === 401 || e.status === 403 || e.status === 404
-	$("#detail").innerHTML = `<div class="card"><p class="err">${auth ? "GitHub refused the token. It needs Contents: Read and write on " + OWNER + "/" + REPO + "." : "Loading failed: " + esc(e.message)}</p>${auth ? tokenForm() : ""}</div>`
+	notice(`<div class="card"><p class="err">${auth ? "GitHub refused the token. It needs Contents: Read and write on " + OWNER + "/" + REPO + "." : "Loading failed: " + esc(e.message)}</p>${auth ? tokenForm() : ""}</div>`)
 }
 function tokenForm() {
 	return `<label for="token">GitHub token for ${OWNER}/${REPO}</label>
@@ -547,7 +552,7 @@ document.addEventListener("toggle", (ev) => {
 addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size) e.preventDefault() })
 const h = location.hash.slice(1).match(/^(quests|npcs)-(.+)$/)
 if (h) { S.tab = h[1]; S.sel = h[2]; $("#main").dataset.view = "detail" }
-if (!S.token) $("#detail").innerHTML = `<div class="card"><h2>Text Desk</h2><p>Read, edit and rate the game's quest text and voice lines. Your edits and ratings are saved to the ${BRANCH} branch.</p>${tokenForm()}</div>`
+if (!S.token) notice(`<div class="card"><h2>Text Desk</h2><p>Read, edit and rate the game's quest text and voice lines. Your edits and ratings are saved to the ${BRANCH} branch.</p>${tokenForm()}</div>`)
 else load().catch(showError)
 </script>
 </body>
