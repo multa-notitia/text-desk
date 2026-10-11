@@ -141,6 +141,9 @@ const S = {
 // ---- GitHub
 async function gh(path, opt = {}) {
 	const r = await fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + path, {
+		// The browser would otherwise reuse GitHub's answers for a minute, so a save right
+		// after another one read the branch from before it and kept failing. Blobs never change.
+		cache: path.startsWith("/git/blobs/") ? "force-cache" : "no-store",
 		...opt, headers: { Authorization: "Bearer " + S.token, Accept: opt.raw ? "application/vnd.github.raw" : "application/vnd.github+json", ...(opt.body ? { "Content-Type": "application/json" } : {}) },
 		body: opt.body && JSON.stringify(opt.body),
 	})
@@ -329,7 +332,7 @@ function lineHtml(it) {
 	const cells = S.langs.map((lang) => {
 		const ek = it.key + "|" + lang, pend = S.edits.get(ek), cur = textOf(it, lang)
 		const voice = it.voiced ? `<div class="voice">${audioOf(it, lang)
-			? `<button class="play" data-play="${esc(audioPath(it, lang))}">▶ Play</button>`
+			? `<button class="play" data-play="${esc(audioPath(it, lang))}">${playLabel(audioPath(it, lang))}</button>`
 			: '<span class="meta">Not recorded yet</span>'}</div>${rater(it, lang, "audio")}` : ""
 		return `<div class="cell ${pend ? "dirty" : ""}"><div class="lang">${lang.toUpperCase()}${lang === "de" && !cur ? ' <span class="meta">no translation yet</span>' : ""}</div>
 			<textarea data-edit="${esc(ek)}" class="${cur ? "" : "missing"}" rows="${Math.min(8, Math.ceil(((pend?.text ?? cur).length || 1) / 60) + 1)}">${esc(pend ? pend.text : cur)}</textarea>
@@ -419,7 +422,9 @@ async function save() {
 	if (fbOps.length) op(FB, (src) => { const fb = src.trim() ? JSON.parse(src) : {}; fbOps.forEach((f) => f(fb)); return JSON.stringify(fb, null, "\t") + "\n" })
 	const what = [S.edits.size && S.edits.size + " edit" + (S.edits.size > 1 ? "s" : ""), S.rates.size && S.rates.size + " rating" + (S.rates.size > 1 ? "s" : "")].filter(Boolean).join(", ")
 	for (let attempt = 0; ; attempt++) {
-		const head = await branchHead()
+		// First try on top of what this page last saw or saved; only re-read the branch when
+		// GitHub says it has moved (another device saved, or a Claude rework landed).
+		const head = attempt === 0 && S.head ? S.head : await branchHead()
 		const commit = await gh("/git/commits/" + head)
 		const out = {}
 		for (const [p, fs] of Object.entries(fileOps)) {
@@ -435,7 +440,8 @@ async function save() {
 			Object.assign(S.files, out); S.head = c.sha
 			break
 		}
-		if (attempt === 3) throw new Error("The branch kept moving while saving. Try Save again.")
+		if (attempt === 3) throw new Error("GitHub refused the save four times: " + (await r.text()).slice(0, 160))
+		await new Promise((ok) => setTimeout(ok, 1000 * (attempt + 1)))
 	}
 	S.edits.clear(); S.rates.clear()
 	build()
@@ -490,18 +496,32 @@ document.addEventListener("input", (ev) => {
 	}
 })
 
+// One voice at a time: Play starts a line and stops any other, Stop ends it.
 const audioCache = new Map()
+let playing = null // {path, audio}
+const playLabel = (path) => playing?.path === path ? "■ Stop" : "▶ Play"
+function setPlayLabels() { document.querySelectorAll("[data-play]").forEach((b) => (b.textContent = playLabel(b.dataset.play))) }
+function stopVoice() { playing?.audio?.pause(); playing = null; setPlayLabels() }
 async function play(btn, path) {
+	const again = playing?.path === path
+	stopVoice()
+	if (again) return
+	const me = (playing = { path, audio: null })
 	btn.textContent = "…"
 	try {
 		if (!audioCache.has(path)) {
 			const buf = await (await gh("/git/blobs/" + S.tree.get(path), { raw: true })).arrayBuffer()
 			audioCache.set(path, URL.createObjectURL(new Blob([buf], { type: "audio/ogg" })))
 		}
-		const a = new Audio(audioCache.get(path))
-		a.onended = () => (btn.textContent = "▶ Play")
-		await a.play(); btn.textContent = "■ Playing"
-	} catch (e) { btn.textContent = "Can't play"; btn.title = "This browser can't play the Ogg file: " + e.message }
+		if (playing !== me) return // another line was started or this one stopped while loading
+		me.audio = new Audio(audioCache.get(path))
+		me.audio.onended = () => { if (playing === me) stopVoice() }
+		setPlayLabels()
+		await me.audio.play()
+	} catch (e) {
+		if (playing === me) playing = null
+		btn.textContent = "Can't play"; btn.title = "This browser can't play the Ogg file: " + e.message
+	}
 }
 
 function showError(e) {
