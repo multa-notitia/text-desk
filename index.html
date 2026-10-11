@@ -47,7 +47,17 @@ main { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr)
 .row { display: flex; gap: 8px; align-items: baseline; text-align: left; width: 100%; border: 0; background: none; padding: 5px 6px; border-radius: 5px }
 .row:hover, .row[aria-current="true"] { background: var(--bg) }
 .row .n { flex: 1; min-width: 0 }
-.row .lv { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums }
+.row .sub { display: block; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums }
+.row .rw { color: var(--warn); font-weight: 600 } .row .ch { color: var(--changed) }
+.avg { font: 600 15px var(--body); font-variant-numeric: tabular-nums; color: var(--muted); min-width: 2.2em; text-align: right }
+.avg.lo { color: var(--bad) } .avg.mid { color: var(--warn) } .avg.hi { color: var(--good) }
+#sort { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel) }
+h3 .meta { font: 13px var(--body) }
+details.npc { color: var(--ink); font-size: inherit }
+details.npc > summary { cursor: pointer; list-style: none }
+details.npc > summary::-webkit-details-marker { display: none }
+details.npc > summary h3::before { content: "▸ "; color: var(--muted) }
+details.npc[open] > summary h3::before { content: "▾ " }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--line); align-self: center }
 .dot.open { background: var(--warn) } .dot.changed { background: var(--changed) } .dot.done { background: var(--good) }
 h2 { font: 26px var(--display); margin: 0 0 4px; text-wrap: balance }
@@ -124,7 +134,7 @@ const S = {
 	head: "", tree: new Map(), files: {}, fb: {},
 	items: new Map(), quests: [], npcs: {}, de: new Map(),
 	edits: new Map(), rates: new Map(),
-	tab: "quests", filter: store.get("td_filter") || "all", q: "", sel: "",
+	tab: "quests", filter: store.get("td_filter") || "all", sort: store.get("td_sort") || "story", q: "", sel: "", openNpcs: new Set(),
 	langs: (store.get("td_langs") || "en,de").split(","),
 }
 
@@ -206,14 +216,22 @@ const audioOf = (it, lang) => S.tree.get(audioPath(it, lang)) || ""
 const currentOf = (it, lang, kind) => kind === "text" ? textOf(it, lang) : audioOf(it, lang)
 const stateOf = (it, lang, kind) => TD.state(S.fb[fbKey(it, lang, kind)], currentOf(it, lang, kind))
 function cellsOf(it) { return LANGS.flatMap((l) => [[l, "text"], ...(it.voiced ? [[l, "audio"]] : [])]) }
+// Per quest or NPC: how many parts (each text or voice, per language) carry a current
+// rating, their average, and how many are open (rated 6 or lower, noted or flagged).
 function summary(items) {
-	let open = 0, changed = 0, rated = 0, total = 0
+	let open = 0, changed = 0, rated = 0, total = 0, sum = 0
 	for (const it of items) for (const [l, k] of cellsOf(it)) {
 		const s = stateOf(it, l, k); total++
-		if (s.open) open++; else if (s.changed) changed++; else if (s.rating != null) rated++
+		if (s.open) open++
+		if (s.changed) changed++
+		if (s.rating != null) { rated++; sum += s.rating }
 	}
-	return { open, changed, rated, total, cls: open ? "open" : changed ? "changed" : rated === total ? "done" : "" }
+	const avg = rated ? sum / rated : null
+	return { open, changed, rated, total, avg, cls: open ? "open" : changed ? "changed" : rated === total ? "done" : "" }
 }
+// A quest's parts: its own text plus the voiced lines of the NPCs who give and take it.
+const npcLines = (e) => S.tab === "quests" ? questVoices(e).flatMap((id) => S.npcs[id].items.filter((i) => i.voiced)) : []
+const partsOf = (e) => e.items.concat(npcLines(e))
 function openItems() {
 	let n = 0
 	for (const k of Object.keys(S.fb)) {
@@ -239,22 +257,49 @@ function render() {
 function matches(entry) {
 	const q = S.q.toLowerCase()
 	if (q && !entry.items.some((it) => it.en.toLowerCase().includes(q) || textOf(it, "de").toLowerCase().includes(q)) && !entry.id.includes(q)) return false
-	const s = summary(entry.items)
-	return S.filter === "all" || (S.filter === "open" && s.open) || (S.filter === "changed" && s.changed) || (S.filter === "unrated" && s.rated + s.open + s.changed < s.total)
+	const s = summary(partsOf(entry))
+	return (FILTERS[S.filter] || FILTERS.all)[1](s)
+}
+const FILTERS = {
+	all: ["All", () => true],
+	open: ["Needs rework", (s) => s.open],
+	none: ["Not started", (s) => !s.rated],
+	partly: ["Partly rated", (s) => s.rated && s.rated < s.total],
+	done: ["Fully rated", (s) => s.rated === s.total],
+	low: ["Average below 7", (s) => s.avg != null && s.avg < 7],
+	changed: ["Changed since rated", (s) => s.changed],
+}
+const SORTS = {
+	story: ["Story order", null],
+	low: ["Lowest average first", (a, b) => (a.avg ?? 11) - (b.avg ?? 11)],
+	least: ["Least rated first", (a, b) => a.rated / a.total - b.rated / b.total],
+	open: ["Most to rework first", (a, b) => b.open - a.open],
+}
+
+// "Quest 2/26 · NPC 1/72": rated parts of the quest's own text and of its NPCs' voiced lines.
+function counts(e) {
+	const t = summary(e.items), v = summary(npcLines(e))
+	return S.tab === "quests" ? `Quest ${t.rated}/${t.total}${v.total ? ` · NPC ${v.rated}/${v.total}` : ""}` : `${t.rated}/${t.total} rated`
 }
 
 function renderList() {
 	const entries = S.tab === "quests" ? S.quests : Object.values(S.npcs).filter((n) => n.items.some((i) => i.voiced))
 	let html = `<div class="tabs"><button data-tab="quests" aria-pressed="${S.tab === "quests"}">Quests</button><button data-tab="npcs" aria-pressed="${S.tab === "npcs"}">Voiced NPCs</button></div>
 		<input id="search" type="search" placeholder="Search text in English or German" value="${esc(S.q)}">
-		<div class="filters">${[["all", "All"], ["open", "Open"], ["unrated", "Not rated"], ["changed", "Changed"]].map(([v, t]) => `<button data-filter="${v}" aria-pressed="${S.filter === v}">${t}</button>`).join("")}</div>`
-	let region = ""
-	for (const e of entries) {
-		if (!matches(e)) continue
-		if (e.region !== region) { region = e.region; html += `<div class="group">${esc(region.replace(/_/g, " "))}</div>` }
-		const s = summary(e.items)
-		html += `<button class="row" data-sel="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${s.cls}"></span><span class="n">${esc(e.def.name || e.id)}</span><span class="lv">${e.def.level != null ? "L" + e.def.level : esc(e.def.title || "")}</span></button>`
+		<div class="filters">${Object.entries(FILTERS).map(([v, [t]]) => `<button data-filter="${v}" aria-pressed="${S.filter === v}">${t}</button>`).join("")}</div>
+		<select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([v, [t]]) => `<option value="${v}" ${S.sort === v ? "selected" : ""}>${t}</option>`).join("")}</select>`
+	let rows = entries.filter(matches).map((e) => ({ e, s: summary(partsOf(e)) }))
+	if (SORTS[S.sort]?.[1]) rows = rows.map((r) => ({ ...r, ...r.s })).sort(SORTS[S.sort][1])
+	let region = "", total = { rated: 0, total: 0, open: 0 }
+	for (const { e, s } of rows) {
+		total.rated += s.rated; total.total += s.total; total.open += s.open
+		if (!SORTS[S.sort]?.[1] && e.region !== region) { region = e.region; html += `<div class="group">${esc(region.replace(/_/g, " "))}</div>` }
+		html += `<button class="row" data-sel="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${s.cls}"></span>
+			<span class="n">${esc(e.def.name || e.id)}<span class="sub">${e.def.level != null ? "L" + e.def.level + " · " : ""}${counts(e)}${s.open ? ` · <b class="rw">${s.open} to rework</b>` : ""}${s.changed ? ` · <span class="ch">${s.changed} changed</span>` : ""}</span></span>
+			<span class="avg ${s.avg == null ? "" : s.avg < 5 ? "lo" : s.avg < 7 ? "mid" : "hi"}">${s.avg == null ? "–" : s.avg.toFixed(1)}</span></button>`
 	}
+	html += rows.length ? "" : '<p class="meta">Nothing matches.</p>'
+	html = `<div class="meta">${rows.length} shown · ${total.rated} of ${total.total} parts rated${total.open ? " · " + total.open + " to rework" : ""}</div>` + html
 	const focus = document.activeElement?.id === "search"
 	$("#list").innerHTML = html
 	if (focus) { const s = $("#search"); s.focus(); s.setSelectionRange(s.value.length, s.value.length) }
@@ -300,18 +345,31 @@ function renderDetail() {
 	let html = '<button class="back" data-back="1">← List</button>'
 	if (S.tab === "quests") {
 		html += `<h2>${esc(d.name)}</h2><div class="meta">Level ${esc(d.level)} · ${esc(entry.region.replace(/_/g, " "))}${d.giver ? " · from " + esc(npcName(d.giver)) : ""}${d.turn_in ? " · hand in to " + esc(npcName(d.turn_in)) : ""}</div>`
+		const s = summary(partsOf(entry))
+		html += `<div class="meta">${counts(entry)} rated${s.avg != null ? " · average " + s.avg.toFixed(1) : ""}${s.open ? " · " + s.open + " to rework" : ""}</div>`
 		html += entry.items.map(lineHtml).join("")
-		for (const id of questVoices(entry)) html += npcSection(S.npcs[id])
-	} else html += `<h2>${esc(d.name)}</h2><div class="meta">${esc(d.title || "")} · ${esc(entry.region.replace(/_/g, " "))}</div>` + npcSection(entry, true)
+		const giver = S.npcs[d.giver], taker = d.turn_in !== d.giver ? S.npcs[d.turn_in] : null
+		if (giver) html += npcSection(giver, false, "gives this quest")
+		if (taker) html += npcSection(taker, false, "takes it in")
+	} else {
+		const quests = S.quests.filter((q) => q.def.giver === entry.id || q.def.turn_in === entry.id)
+		html += `<h2>${esc(d.name)}</h2><div class="meta">${esc(d.title || "")} · ${esc(entry.region.replace(/_/g, " "))}</div>`
+			+ (quests.length ? `<div class="meta">Quests: ${quests.map((q) => `<a href="#quests-${esc(q.id)}" data-goto="${esc(q.id)}">${esc(q.def.name)}</a>`).join(", ")}</div>` : "")
+			+ npcSection(entry, true)
+	}
 	const y = $("#detail").scrollTop
 	$("#detail").innerHTML = html
 	$("#detail").scrollTop = y
 }
 
-function npcSection(n, all) {
+function npcSection(n, all, role) {
 	const items = all ? n.items : n.items.filter((i) => i.voiced)
 	if (!items.length) return ""
-	return `<h3>${esc(n.def.name)}${n.def.title ? " · " + esc(n.def.title) : ""}</h3>${n.def.speaker ? `<div class="meta">Voice: ${esc(n.def.speaker)}</div>` : ""}` + items.map(lineHtml).join("")
+	const body = (n.def.speaker ? `<div class="meta">Voice: ${esc(n.def.speaker)}</div>` : "") + items.map(lineHtml).join("")
+	if (!role) return `<h3>${esc(n.def.name)}${n.def.title ? " · " + esc(n.def.title) : ""}</h3>` + body
+	// In a quest, the NPC's lines fold away so the quest's own text stays first.
+	const s = summary(items)
+	return `<details class="npc" data-npc="${esc(n.id)}" ${S.openNpcs.has(n.id) ? "open" : ""}><summary><h3>${esc(n.def.name)} <span class="meta">${role} · ${items.length} voiced lines · ${s.rated}/${s.total} rated${s.open ? " · " + s.open + " to rework" : ""}</span></h3></summary>${body}</details>`
 }
 
 function renderSavebar() {
@@ -385,6 +443,8 @@ async function save() {
 
 // ---- Events
 document.addEventListener("click", async (ev) => {
+	const g = ev.target.closest("a[data-goto]")
+	if (g) { ev.preventDefault(); S.tab = "quests"; S.sel = g.dataset.goto; location.hash = "quests-" + S.sel; $("#detail").scrollTop = 0; render(); return }
 	const b = ev.target.closest("button")
 	if (!b) return
 	const d = b.dataset
@@ -415,6 +475,7 @@ document.addEventListener("click", async (ev) => {
 document.addEventListener("input", (ev) => {
 	const t = ev.target, d = t.dataset
 	if (t.id === "search") { S.q = t.value; renderList() }
+	else if (t.id === "sort") { S.sort = t.value; store.set("td_sort", t.value); renderList() }
 	else if (d.edit) {
 		const [key, lang] = [d.edit.slice(0, d.edit.lastIndexOf("|")), d.edit.slice(d.edit.lastIndexOf("|") + 1)]
 		const it = S.items.get(key)
@@ -459,6 +520,10 @@ document.addEventListener("click", (ev) => {
 	load().catch(showError)
 })
 
+document.addEventListener("toggle", (ev) => {
+	const n = ev.target.dataset?.npc
+	if (n) ev.target.open ? S.openNpcs.add(n) : S.openNpcs.delete(n)
+}, true)
 addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size) e.preventDefault() })
 const h = location.hash.slice(1).match(/^(quests|npcs)-(.+)$/)
 if (h) { S.tab = h[1]; S.sel = h[2]; $("#main").dataset.view = "detail" }
