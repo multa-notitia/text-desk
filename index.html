@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Text Desk</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600&family=Marcellus&display=swap">
+<style>
+/* Two panes: quest list left, the quest's lines right; one pane at a time on a phone. */
+:root {
+	--bg: #eef0f3; --panel: #ffffff; --ink: #1c2230; --muted: #5c6475; --line: #d9dde5;
+	--accent: #2d5b87; --accent-ink: #ffffff;
+	--bad: #b3413a; --warn: #a8701a; --good: #357549; --changed: #6a57b0;
+	--display: "Marcellus", Georgia, serif; --body: "Fira Sans", system-ui, sans-serif;
+	color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+	--bg: #13161c; --panel: #1b1f27; --ink: #e5e8ee; --muted: #98a0b1; --line: #2c323d;
+	--accent: #84abd8; --accent-ink: #10151d; --bad: #e07a72; --warn: #d9a548; --good: #6fbf86; --changed: #a897e6;
+	color-scheme: dark } }
+:root[data-theme="dark"] {
+	--bg: #13161c; --panel: #1b1f27; --ink: #e5e8ee; --muted: #98a0b1; --line: #2c323d;
+	--accent: #84abd8; --accent-ink: #10151d; --bad: #e07a72; --warn: #d9a548; --good: #6fbf86; --changed: #a897e6;
+	color-scheme: dark }
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+html, body { height: 100% }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--body) }
+button, input, textarea, select { font: inherit; color: inherit }
+button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 6px 10px }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
+.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent) }
+header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+	padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line) }
+header h1 { font: 22px var(--display); margin: 0; letter-spacing: .02em }
+.meta { color: var(--muted); font-size: 13px }
+.grow { flex: 1 }
+.open-count { font-weight: 600; color: var(--warn) }
+main { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 0; height: calc(100% - 58px) }
+#list { border-right: 1px solid var(--line); overflow-y: auto; padding-block: 12px; padding-inline: 16px; display: flex; flex-direction: column; gap: 10px }
+#detail { overflow-y: auto; padding-block: 16px 96px; padding-inline: 16px; min-width: 0 }
+.tabs, .filters { display: flex; flex-wrap: wrap; gap: 6px }
+.tabs button[aria-pressed="true"], .filters button[aria-pressed="true"], .langs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent) }
+.filters button { font-size: 13px; padding: 3px 9px; border-radius: 99px }
+#search { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg) }
+.group { font: 13px var(--display); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: 6px }
+.row { display: flex; gap: 8px; align-items: baseline; text-align: left; width: 100%; border: 0; background: none; padding: 5px 6px; border-radius: 5px }
+.row:hover, .row[aria-current="true"] { background: var(--bg) }
+.row .n { flex: 1; min-width: 0 }
+.row .lv { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--line); align-self: center }
+.dot.open { background: var(--warn) } .dot.changed { background: var(--changed) } .dot.done { background: var(--good) }
+h2 { font: 26px var(--display); margin: 0 0 4px; text-wrap: balance }
+h3 { font: 18px var(--display); margin: 28px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 4px }
+.line { display: flex; flex-direction: column; gap: 6px; margin-top: 18px }
+.line > .lab { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted) }
+.cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px }
+.cell { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0 }
+.cell.dirty { border-color: var(--accent) }
+.cell .lang { font-size: 12px; font-weight: 600; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+textarea { width: 100%; resize: vertical; min-height: 3.2em; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: var(--bg); line-height: 1.45 }
+textarea.missing { border-style: dashed }
+.rate { display: flex; flex-wrap: wrap; gap: 3px; align-items: center }
+.rate button { width: 26px; height: 28px; padding: 0; font-size: 13px; font-variant-numeric: tabular-nums }
+.rate button[aria-pressed="true"].lo { background: var(--bad); border-color: var(--bad); color: var(--accent-ink) }
+.rate button[aria-pressed="true"].mid { background: var(--warn); border-color: var(--warn); color: var(--accent-ink) }
+.rate button[aria-pressed="true"].hi { background: var(--good); border-color: var(--good); color: var(--accent-ink) }
+.rate .k { font-size: 12px; color: var(--muted); width: 38px }
+.note { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 14px }
+.chip { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; border: 1px solid currentColor }
+.chip.open { color: var(--warn) } .chip.changed { color: var(--changed) } .chip.flag { color: var(--bad) }
+details { font-size: 13px; color: var(--muted) }
+details ul { margin: 4px 0 0; padding-left: 18px }
+.voice { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.play { min-width: 64px }
+.saybar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+	background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; justify-content: flex-end; z-index: 3 }
+.card { max-width: 560px; margin: 40px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 10px }
+.card input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg) }
+.err { color: var(--bad) }
+.back { display: none }
+@media (max-width: 760px) {
+	main { display: block; height: auto }
+	#list { border-right: 0 }
+	main[data-view="detail"] #list, main[data-view="list"] #detail { display: none }
+	.back { display: inline-block; margin-bottom: 10px }
+	#where { display: none }
+}
+@media (prefers-reduced-motion: no-preference) { .cell { transition: border-color .15s } }
+</style>
+</head>
+<body>
+<header>
+	<h1>Text Desk</h1>
+	<span class="meta" id="where"></span>
+	<span class="grow"></span>
+	<span class="langs" id="langs"></span>
+	<span id="openinfo" class="meta"></span>
+	<button id="nudge" title="Copies the phrase to paste in the project chat">Copy nudge</button>
+	<button id="reload">Reload</button>
+</header>
+<main id="main" data-view="list">
+	<section id="list"></section>
+	<section id="detail"><p class="meta">Loading…</p></section>
+</main>
+<div class="saybar" id="savebar" hidden><span id="pendinginfo" class="meta"></span><button id="discard">Discard</button><button class="primary" id="save">Save</button></div>
+
+<script src="core.js"></script>
+<script>
+// Text Desk: read, edit and rate the game's text and voice lines, straight from GitHub.
+// Everything is committed to the text-review branch; tools/text_desk/README.md says how.
+const OWNER = "multa-notitia", REPO = "Project-Mystery", BRANCH = "text-review", BASE = "main"
+const FB = "feedback/text_reviews.json"
+const LANGS = ["en", "de"]
+const VOICED = ["greeting", "hail", "idle_lines"]
+const NAMES = { name: "Name", title: "Title", text: "Text", progress: "Progress", completion: "Completion", ready_hint: "Ready hint",
+	greeting: "Greeting", hail: "Hail", idle_lines: "Idle line", objectives: "Objective", endings: "Ending", description: "Description", say: "Says" }
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } }
+
+const S = {
+	token: store.get("td_token") || "",
+	head: "", tree: new Map(), files: {}, fb: {},
+	items: new Map(), quests: [], npcs: {}, de: new Map(),
+	edits: new Map(), rates: new Map(),
+	tab: "quests", filter: store.get("td_filter") || "all", q: "", sel: "",
+	langs: (store.get("td_langs") || "en,de").split(","),
+}
+
+// ---- GitHub
+async function gh(path, opt = {}) {
+	const r = await fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + path, {
+		...opt, headers: { Authorization: "Bearer " + S.token, Accept: opt.raw ? "application/vnd.github.raw" : "application/vnd.github+json", ...(opt.body ? { "Content-Type": "application/json" } : {}) },
+		body: opt.body && JSON.stringify(opt.body),
+	})
+	// With `ok`, the caller reads the response itself; those statuses are not errors.
+	if (opt.ok && (r.ok || opt.ok.includes(r.status))) return r
+	if (!r.ok) { const e = new Error((await r.text()).slice(0, 200)); e.status = r.status; throw e }
+	return opt.raw ? r : r.status === 204 ? null : r.json()
+}
+const blobText = async (sha) => (await gh("/git/blobs/" + sha, { raw: true })).text()
+
+async function branchHead() {
+	const r = await gh("/git/ref/heads/" + BRANCH, { ok: [404] })
+	if (r.status !== 404) return (await r.json()).object.sha
+	const main = await gh("/git/ref/heads/" + BASE)
+	await gh("/git/refs", { method: "POST", body: { ref: "refs/heads/" + BRANCH, sha: main.object.sha } })
+	return main.object.sha
+}
+
+// ---- Loading
+async function load() {
+	$("#detail").innerHTML = '<p class="meta">Loading the game text from GitHub…</p>'
+	await branchHead()
+	// Bring other threads' changes on main in, so the desk always shows the game as it is.
+	const m = await gh("/merges", { method: "POST", body: { base: BRANCH, head: BASE, commit_message: "Text Desk: bring in main" }, ok: [201, 204, 409] })
+	S.mergeConflict = m.status === 409
+	S.head = await branchHead()
+	const commit = await gh("/git/commits/" + S.head)
+	const tree = await gh("/git/trees/" + commit.tree.sha + "?recursive=1")
+	// ponytail: one recursive tree call; GitHub truncates past 100k files, far above this repo's ~10k.
+	S.tree = new Map(tree.tree.filter((t) => t.type === "blob").map((t) => [t.path, t.sha]))
+	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB)
+	const texts = await Promise.all(want.map((p) => blobText(S.tree.get(p))))
+	S.files = Object.fromEntries(want.map((p, i) => [p, texts[i]]))
+	build()
+}
+
+function build() {
+	const loc = S.files["scripts/autoload/loc.gd"]
+	S.keys = new Set(loc.match(/const TEXT_KEYS := \[(.*?)\]/s)[1].match(/"[^"]*"/g).map((s) => JSON.parse(s)))
+	S.fb = S.files[FB] ? JSON.parse(S.files[FB]) : {}
+	S.de = new Map()
+	S.items = new Map(); S.quests = []; S.npcs = {}
+	for (const [p, src] of Object.entries(S.files)) {
+		if (p.startsWith("data/locales/de/"))
+			for (const [k, v] of Object.entries(JSON.parse(src))) {
+				const e = S.de.get(k) || (S.de.set(k, { value: v, files: [] }), S.de.get(k))
+				e.files.push(p)
+			}
+	}
+	for (const [p, src] of Object.entries(S.files)) {
+		const m = p.match(/^data\/(quests|npcs)\/(.+)\.json$/)
+		if (!m) continue
+		for (const [id, def] of Object.entries(JSON.parse(src))) {
+			if (!def || typeof def !== "object") continue
+			const items = TD.textFields(def, S.keys).map((f) => {
+				const it = { key: m[1] + "/" + id + "/" + f.path.join("/"), type: m[1], id, file: p, region: m[2], path: f.path, en: f.text,
+					voiced: m[1] === "npcs" && !!def.speaker && VOICED.includes(f.path[0]) }
+				S.items.set(it.key, it)
+				return it
+			})
+			const entry = { id, def, file: p, region: m[2], items }
+			if (m[1] === "quests") S.quests.push(entry); else S.npcs[id] = entry
+		}
+	}
+	render()
+}
+
+// ---- What is current, and its rating state
+const fbKey = (it, lang, kind) => it.key + "|" + lang + "|" + kind
+const textOf = (it, lang) => lang === "en" ? it.en : S.de.get(it.en)?.value ?? ""
+const audioPath = (it, lang) => TD.speechPath(lang, it.id, it.en)
+const audioOf = (it, lang) => S.tree.get(audioPath(it, lang)) || ""
+const currentOf = (it, lang, kind) => kind === "text" ? textOf(it, lang) : audioOf(it, lang)
+const stateOf = (it, lang, kind) => TD.state(S.fb[fbKey(it, lang, kind)], currentOf(it, lang, kind))
+function cellsOf(it) { return LANGS.flatMap((l) => [[l, "text"], ...(it.voiced ? [[l, "audio"]] : [])]) }
+function summary(items) {
+	let open = 0, changed = 0, rated = 0, total = 0
+	for (const it of items) for (const [l, k] of cellsOf(it)) {
+		const s = stateOf(it, l, k); total++
+		if (s.open) open++; else if (s.changed) changed++; else if (s.rating != null) rated++
+	}
+	return { open, changed, rated, total, cls: open ? "open" : changed ? "changed" : rated === total ? "done" : "" }
+}
+function openItems() {
+	let n = 0
+	for (const k of Object.keys(S.fb)) {
+		const [key, lang, kind] = k.split("|"), it = S.items.get(key)
+		if (it && TD.state(S.fb[k], currentOf(it, lang, kind)).open) n++
+	}
+	return n
+}
+
+// ---- Rendering
+const labelOf = (path) => path.filter((p, i) => !(i && p === "text")).map((p) => typeof p === "number" ? p + 1 : NAMES[p] || p.replace(/_/g, " ")).join(" · ")
+const npcName = (id) => S.npcs[id]?.def.name || id
+function questVoices(q) { return [...new Set([q.def.giver, q.def.turn_in].filter((id) => S.npcs[id]))] }
+
+function render() {
+	$("#where").textContent = "branch " + BRANCH + (S.mergeConflict ? " · main has changes that clash with this branch; they come in on the next nudge" : "")
+	const n = openItems()
+	$("#openinfo").innerHTML = n ? '<span class="open-count">' + n + "</span> open" : "Nothing open"
+	$("#langs").innerHTML = ["en", "de", "en,de"].map((v) => `<button data-langs="${v}" aria-pressed="${S.langs.join() === v}">${v === "en,de" ? "Both" : v.toUpperCase()}</button>`).join(" ")
+	renderList(); renderDetail(); renderSavebar()
+}
+
+function matches(entry) {
+	const q = S.q.toLowerCase()
+	if (q && !entry.items.some((it) => it.en.toLowerCase().includes(q) || textOf(it, "de").toLowerCase().includes(q)) && !entry.id.includes(q)) return false
+	const s = summary(entry.items)
+	return S.filter === "all" || (S.filter === "open" && s.open) || (S.filter === "changed" && s.changed) || (S.filter === "unrated" && s.rated + s.open + s.changed < s.total)
+}
+
+function renderList() {
+	const entries = S.tab === "quests" ? S.quests : Object.values(S.npcs).filter((n) => n.items.some((i) => i.voiced))
+	let html = `<div class="tabs"><button data-tab="quests" aria-pressed="${S.tab === "quests"}">Quests</button><button data-tab="npcs" aria-pressed="${S.tab === "npcs"}">Voiced NPCs</button></div>
+		<input id="search" type="search" placeholder="Search text in English or German" value="${esc(S.q)}">
+		<div class="filters">${[["all", "All"], ["open", "Open"], ["unrated", "Not rated"], ["changed", "Changed"]].map(([v, t]) => `<button data-filter="${v}" aria-pressed="${S.filter === v}">${t}</button>`).join("")}</div>`
+	let region = ""
+	for (const e of entries) {
+		if (!matches(e)) continue
+		if (e.region !== region) { region = e.region; html += `<div class="group">${esc(region.replace(/_/g, " "))}</div>` }
+		const s = summary(e.items)
+		html += `<button class="row" data-sel="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${s.cls}"></span><span class="n">${esc(e.def.name || e.id)}</span><span class="lv">${e.def.level != null ? "L" + e.def.level : esc(e.def.title || "")}</span></button>`
+	}
+	const focus = document.activeElement?.id === "search"
+	$("#list").innerHTML = html
+	if (focus) { const s = $("#search"); s.focus(); s.setSelectionRange(s.value.length, s.value.length) }
+}
+
+function history(rec) {
+	if (!rec?.history?.length) return ""
+	return `<details><summary>History (${rec.history.length})</summary><ul>${rec.history.slice().reverse().map((h) =>
+		h.was != null ? `<li>${esc((h.at || "").slice(0, 10))} ${esc(h.by || "")} edited. It was: “${esc(h.was)}”</li>`
+			: `<li>${esc((h.at || "").slice(0, 10))} rated ${h.rating ?? "–"}/10${h.note ? ": " + esc(h.note) : ""}</li>`).join("")}</ul></details>`
+}
+
+function rater(it, lang, kind) {
+	const k = fbKey(it, lang, kind), rec = S.fb[k], st = stateOf(it, lang, kind), p = S.rates.get(k)
+	const rating = p ? p.rating : st.rating, note = p ? p.note : st.changed ? "" : rec?.note || ""
+	const chips = (st.open ? '<span class="chip open">open</span>' : "")
+		+ (st.changed ? `<span class="chip changed">changed since rated ${rec.rating ?? ""}${rec.rating != null ? "/10" : ""}</span>` : "")
+		+ (rec?.flag && rec.flag_of === currentOf(it, lang, kind) ? `<span class="chip flag">${esc(rec.flag)}</span>` : "")
+	const btns = Array.from({ length: 10 }, (_, i) => i + 1).map((n) =>
+		`<button data-rate="${esc(k)}" data-n="${n}" class="${n <= 4 ? "lo" : n <= 6 ? "mid" : "hi"}" aria-pressed="${rating === n}" aria-label="${kind} ${n} of 10">${n}</button>`).join("")
+	return `<div class="rate"><span class="k">${kind === "text" ? "Text" : "Voice"}</span>${btns}</div>
+		<input class="note" data-note="${esc(k)}" placeholder="Note on the ${kind === "text" ? "text" : "voice"}" value="${esc(note)}">
+		${chips ? `<div class="lang">${chips}</div>` : ""}${history(rec)}`
+}
+
+function lineHtml(it) {
+	const cells = S.langs.map((lang) => {
+		const ek = it.key + "|" + lang, pend = S.edits.get(ek), cur = textOf(it, lang)
+		const voice = it.voiced ? `<div class="voice">${audioOf(it, lang)
+			? `<button class="play" data-play="${esc(audioPath(it, lang))}">▶ Play</button>`
+			: '<span class="meta">Not recorded yet</span>'}</div>${rater(it, lang, "audio")}` : ""
+		return `<div class="cell ${pend ? "dirty" : ""}"><div class="lang">${lang.toUpperCase()}${lang === "de" && !cur ? ' <span class="meta">no translation yet</span>' : ""}</div>
+			<textarea data-edit="${esc(ek)}" class="${cur ? "" : "missing"}" rows="${Math.min(8, Math.ceil(((pend?.text ?? cur).length || 1) / 60) + 1)}">${esc(pend ? pend.text : cur)}</textarea>
+			${rater(it, lang, "text")}${voice}</div>`
+	}).join("")
+	return `<div class="line"><div class="lab">${esc(labelOf(it.path))}</div><div class="cells">${cells}</div></div>`
+}
+
+function renderDetail() {
+	const entry = S.tab === "quests" ? S.quests.find((q) => q.id === S.sel) : S.npcs[S.sel]
+	if (!entry) { $("#detail").innerHTML = '<p class="meta">Pick a quest or an NPC on the left.</p>'; return }
+	const d = entry.def
+	let html = '<button class="back" data-back="1">← List</button>'
+	if (S.tab === "quests") {
+		html += `<h2>${esc(d.name)}</h2><div class="meta">Level ${esc(d.level)} · ${esc(entry.region.replace(/_/g, " "))}${d.giver ? " · from " + esc(npcName(d.giver)) : ""}${d.turn_in ? " · hand in to " + esc(npcName(d.turn_in)) : ""}</div>`
+		html += entry.items.map(lineHtml).join("")
+		for (const id of questVoices(entry)) html += npcSection(S.npcs[id])
+	} else html += `<h2>${esc(d.name)}</h2><div class="meta">${esc(d.title || "")} · ${esc(entry.region.replace(/_/g, " "))}</div>` + npcSection(entry, true)
+	const y = $("#detail").scrollTop
+	$("#detail").innerHTML = html
+	$("#detail").scrollTop = y
+}
+
+function npcSection(n, all) {
+	const items = all ? n.items : n.items.filter((i) => i.voiced)
+	if (!items.length) return ""
+	return `<h3>${esc(n.def.name)}${n.def.title ? " · " + esc(n.def.title) : ""}</h3>${n.def.speaker ? `<div class="meta">Voice: ${esc(n.def.speaker)}</div>` : ""}` + items.map(lineHtml).join("")
+}
+
+function renderSavebar() {
+	const n = S.edits.size + S.rates.size
+	$("#savebar").hidden = !n
+	$("#pendinginfo").textContent = n + (n === 1 ? " unsaved change" : " unsaved changes")
+}
+
+// ---- Saving: one commit per Save, replayed on the latest branch if it moved meanwhile.
+async function save() {
+	const at = new Date().toISOString()
+	const fileOps = {}, fbOps = []
+	const op = (p, f) => (fileOps[p] ||= []).push(f)
+	const newEn = new Map()
+	for (const [ek, e] of S.edits) if (e.lang === "en") newEn.set(e.it.key, e.text)
+	for (const [ek, { it, lang, text }] of S.edits) {
+		const was = textOf(it, lang)
+		if (lang === "en") {
+			const path = [it.id, ...it.path]
+			op(it.file, (src) => {
+				let v = JSON.parse(src); for (const k of path) v = v?.[k]
+				if (v !== was) throw new Error(`“${labelOf(it.path)}” of ${it.id} changed on GitHub meanwhile. Reload and edit again.`)
+				return TD.setString(src, path, text)
+			})
+			fbOps.push((fb) => TD.edited(fb, fbKey(it, "en", "text"), was, at))
+			const de = S.de.get(was)
+			if (de && !S.de.has(text)) for (const f of de.files) op(f, (src) => TD.setEntry(src, text, de.value))
+			if (de) fbOps.push((fb) => TD.flag(fb, fbKey(it, "de", "text"), S.de.get(text)?.value ?? de.value, "English changed"))
+			if (it.voiced) for (const l of LANGS) {
+				const sha = S.tree.get(TD.speechPath(l, it.id, text)) || ""
+				fbOps.push((fb) => TD.flag(fb, fbKey(it, l, "audio"), sha, "Text changed, record again"))
+			}
+		} else {
+			const en = newEn.get(it.key) ?? it.en
+			const files = S.de.get(en)?.files || S.de.get(it.en)?.files || ["data/locales/de/" + it.region + ".json"]
+			for (const f of files) op(f, (src) => TD.setEntry(src, en, text))
+			fbOps.push((fb) => TD.edited(fb, fbKey(it, "de", "text"), was, at))
+			if (it.voiced) fbOps.push((fb) => TD.flag(fb, fbKey(it, "de", "audio"), S.tree.get(TD.speechPath("de", it.id, en)) || "", "Text changed, record again"))
+		}
+	}
+	for (const [k, r] of S.rates) {
+		const [key, lang, kind] = k.split("|"), it = S.items.get(key)
+		const edit = S.edits.get(key + "|" + lang)
+		const current = kind === "text" && edit ? edit.text : currentOf(it, lang, kind)
+		fbOps.push((fb) => TD.rate(fb, k, current, r.rating, r.note, at))
+	}
+	if (fbOps.length) op(FB, (src) => { const fb = src.trim() ? JSON.parse(src) : {}; fbOps.forEach((f) => f(fb)); return JSON.stringify(fb, null, "\t") + "\n" })
+	const what = [S.edits.size && S.edits.size + " edit" + (S.edits.size > 1 ? "s" : ""), S.rates.size && S.rates.size + " rating" + (S.rates.size > 1 ? "s" : "")].filter(Boolean).join(", ")
+	for (let attempt = 0; ; attempt++) {
+		const head = await branchHead()
+		const commit = await gh("/git/commits/" + head)
+		const out = {}
+		for (const [p, fs] of Object.entries(fileOps)) {
+			const r = await gh("/contents/" + p + "?ref=" + head, { raw: true, ok: [404] })
+			out[p] = fs.reduce((src, f) => f(src), r.status === 404 ? "" : await r.text())
+		}
+		const tree = await gh("/git/trees", { method: "POST", body: { base_tree: commit.tree.sha, tree: Object.entries(out).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })) } })
+		const c = await gh("/git/commits", { method: "POST", body: { message: "Text Desk: " + what, tree: tree.sha, parents: [head] } })
+		const r = await gh("/git/refs/heads/" + BRANCH, { method: "PATCH", body: { sha: c.sha, force: false }, ok: [422] })
+		if (r.status !== 422) {
+			const t = await gh("/git/trees/" + tree.sha + "?recursive=1")
+			S.tree = new Map(t.tree.filter((x) => x.type === "blob").map((x) => [x.path, x.sha]))
+			Object.assign(S.files, out); S.head = c.sha
+			break
+		}
+		if (attempt === 3) throw new Error("The branch kept moving while saving. Try Save again.")
+	}
+	S.edits.clear(); S.rates.clear()
+	build()
+}
+
+// ---- Events
+document.addEventListener("click", async (ev) => {
+	const b = ev.target.closest("button")
+	if (!b) return
+	const d = b.dataset
+	if (d.tab) { S.tab = d.tab; S.sel = ""; render() }
+	else if (d.filter) { S.filter = d.filter; store.set("td_filter", d.filter); renderList() }
+	else if (d.langs) { S.langs = d.langs.split(","); store.set("td_langs", d.langs); render() }
+	else if (d.sel) { S.sel = d.sel; $("#main").dataset.view = "detail"; $("#detail").scrollTop = 0; location.hash = S.tab + "-" + d.sel; render() }
+	else if (d.back) { $("#main").dataset.view = "list"; render() }
+	else if (d.rate) {
+		const k = d.rate, n = +d.n, it = S.items.get(k.split("|")[0]), [, lang, kind] = k.split("|")
+		const st = stateOf(it, lang, kind), p = S.rates.get(k) || { rating: st.rating, note: st.changed ? "" : S.fb[k]?.note || "" }
+		p.rating = p.rating === n ? null : n
+		const unchanged = p.rating === st.rating && !st.changed && p.note === (S.fb[k]?.note || "")
+		unchanged ? S.rates.delete(k) : S.rates.set(k, p)
+		renderDetail(); renderSavebar()
+	} else if (d.play) play(b, d.play)
+	else if (b.id === "save") {
+		b.disabled = true; b.textContent = "Saving…"
+		try { await save() } catch (e) { $("#pendinginfo").innerHTML = '<span class="err">' + esc(e.message) + "</span>" }
+		b.disabled = false; b.textContent = "Save"
+	} else if (b.id === "discard") { S.edits.clear(); S.rates.clear(); render() }
+	else if (b.id === "reload") { if (S.edits.size + S.rates.size) { $("#pendinginfo").textContent = "Save or discard your changes first."; return } load().catch(showError) }
+	else if (b.id === "nudge") {
+		try { await navigator.clipboard.writeText("check text feedback"); b.textContent = "Copied" } catch { b.textContent = "Say: check text feedback" }
+		setTimeout(() => (b.textContent = "Copy nudge"), 2500)
+	}
+})
+document.addEventListener("input", (ev) => {
+	const t = ev.target, d = t.dataset
+	if (t.id === "search") { S.q = t.value; renderList() }
+	else if (d.edit) {
+		const [key, lang] = [d.edit.slice(0, d.edit.lastIndexOf("|")), d.edit.slice(d.edit.lastIndexOf("|") + 1)]
+		const it = S.items.get(key)
+		t.value === textOf(it, lang) ? S.edits.delete(d.edit) : S.edits.set(d.edit, { it, lang, text: t.value })
+		t.closest(".cell").classList.toggle("dirty", S.edits.has(d.edit)); renderSavebar()
+	} else if (d.note) {
+		const k = d.note, it = S.items.get(k.split("|")[0]), [, lang, kind] = k.split("|"), st = stateOf(it, lang, kind)
+		const p = S.rates.get(k) || { rating: st.rating }
+		p.note = t.value.trim()
+		p.rating === st.rating && !st.changed && p.note === (S.fb[k]?.note || "") ? S.rates.delete(k) : S.rates.set(k, p)
+		renderSavebar()
+	}
+})
+
+const audioCache = new Map()
+async function play(btn, path) {
+	btn.textContent = "…"
+	try {
+		if (!audioCache.has(path)) {
+			const buf = await (await gh("/git/blobs/" + S.tree.get(path), { raw: true })).arrayBuffer()
+			audioCache.set(path, URL.createObjectURL(new Blob([buf], { type: "audio/ogg" })))
+		}
+		const a = new Audio(audioCache.get(path))
+		a.onended = () => (btn.textContent = "▶ Play")
+		await a.play(); btn.textContent = "■ Playing"
+	} catch (e) { btn.textContent = "Can't play"; btn.title = "This browser can't play the Ogg file: " + e.message }
+}
+
+function showError(e) {
+	const auth = e.status === 401 || e.status === 403 || e.status === 404
+	$("#detail").innerHTML = `<div class="card"><p class="err">${auth ? "GitHub refused the token. It needs Contents: Read and write on " + OWNER + "/" + REPO + "." : "Loading failed: " + esc(e.message)}</p>${auth ? tokenForm() : ""}</div>`
+}
+function tokenForm() {
+	return `<label for="token">GitHub token for ${OWNER}/${REPO}</label>
+		<input id="token" type="password" autocomplete="off" placeholder="github_pat_…">
+		<span class="meta">It stays in this browser only. Create one at github.com/settings/personal-access-tokens/new with access to Project-Mystery and Contents set to Read and write.</span>
+		<button class="primary" id="usetoken">Use this token</button>`
+}
+document.addEventListener("click", (ev) => {
+	if (ev.target.id !== "usetoken") return
+	S.token = $("#token").value.trim(); store.set("td_token", S.token)
+	load().catch(showError)
+})
+
+addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size) e.preventDefault() })
+const h = location.hash.slice(1).match(/^(quests|npcs)-(.+)$/)
+if (h) { S.tab = h[1]; S.sel = h[2]; $("#main").dataset.view = "detail" }
+if (!S.token) $("#detail").innerHTML = `<div class="card"><h2>Text Desk</h2><p>Read, edit and rate the game's quest text and voice lines. Your edits and ratings are saved to the ${BRANCH} branch.</p>${tokenForm()}</div>`
+else load().catch(showError)
+</script>
+</body>
+</html>
