@@ -121,10 +121,12 @@ details ul { margin: 4px 0 0; padding-left: 18px }
 // Everything is committed to the text-review branch; tools/text_desk/README.md says how.
 const OWNER = "multa-notitia", REPO = "Project-Mystery", BRANCH = "text-review", BASE = "main"
 const FB = "feedback/text_reviews.json"
+// Versions of the same lines written in different styles, rated to pin down the voice (README).
+const CAL = "feedback/calibration.json"
 const LANGS = ["en", "de"]
 const VOICED = ["greeting", "hail", "idle_lines"]
 const NAMES = { name: "Name", title: "Title", text: "Text", progress: "Progress", completion: "Completion", ready_hint: "Ready hint",
-	greeting: "Greeting", hail: "Hail", idle_lines: "Idle line", objectives: "Objective", endings: "Ending", description: "Description", say: "Says" }
+	versions: "Version", greeting: "Greeting", hail: "Hail", idle_lines: "Idle line", objectives: "Objective", endings: "Ending", description: "Description", say: "Says" }
 const $ = (s) => document.querySelector(s)
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
 const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } }
@@ -132,7 +134,7 @@ const store = { get(k) { try { return localStorage.getItem(k) } catch { return n
 const S = {
 	token: store.get("td_token") || "",
 	head: "", tree: new Map(), files: {}, fb: {},
-	items: new Map(), quests: [], npcs: {}, de: new Map(),
+	items: new Map(), quests: [], npcs: {}, calib: [], de: new Map(),
 	edits: new Map(), rates: new Map(),
 	tab: "quests", filter: store.get("td_filter") || "all", sort: store.get("td_sort") || "story", q: "", sel: "", openNpcs: new Set(),
 	langs: (store.get("td_langs") || "en,de").split(","),
@@ -174,7 +176,7 @@ async function load() {
 	const tree = await gh("/git/trees/" + commit.tree.sha + "?recursive=1")
 	// ponytail: one recursive tree call; GitHub truncates past 100k files, far above this repo's ~10k.
 	S.tree = new Map(tree.tree.filter((t) => t.type === "blob").map((t) => [t.path, t.sha]))
-	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB)
+	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB || p === CAL)
 	const texts = await Promise.all(want.map((p) => blobText(S.tree.get(p))))
 	S.files = Object.fromEntries(want.map((p, i) => [p, texts[i]]))
 	if (!S.sel) $("#main").dataset.view = "list"
@@ -186,7 +188,7 @@ function build() {
 	S.keys = new Set(loc.match(/const TEXT_KEYS := \[(.*?)\]/s)[1].match(/"[^"]*"/g).map((s) => JSON.parse(s)))
 	S.fb = S.files[FB] ? JSON.parse(S.files[FB]) : {}
 	S.de = new Map()
-	S.items = new Map(); S.quests = []; S.npcs = {}
+	S.items = new Map(); S.quests = []; S.npcs = {}; S.calib = []
 	for (const [p, src] of Object.entries(S.files)) {
 		if (p.startsWith("data/locales/de/"))
 			for (const [k, v] of Object.entries(JSON.parse(src))) {
@@ -195,18 +197,19 @@ function build() {
 			}
 	}
 	for (const [p, src] of Object.entries(S.files)) {
-		const m = p.match(/^data\/(quests|npcs)\/(.+)\.json$/)
+		const m = p === CAL ? [p, "calibration", "calibration"] : p.match(/^data\/(quests|npcs)\/(.+)\.json$/)
 		if (!m) continue
 		for (const [id, def] of Object.entries(JSON.parse(src))) {
 			if (!def || typeof def !== "object") continue
-			const items = TD.textFields(def, S.keys).map((f) => {
+			// A calibration entry rates only its versions; its name and context are the heading.
+			const items = TD.textFields(m[1] === "calibration" ? { versions: def.versions } : def, S.keys).map((f) => {
 				const it = { key: m[1] + "/" + id + "/" + f.path.join("/"), type: m[1], id, file: p, region: m[2], path: f.path, en: f.text,
 					voiced: m[1] === "npcs" && !!def.speaker && VOICED.includes(f.path[0]) }
 				S.items.set(it.key, it)
 				return it
 			})
-			const entry = { id, def, file: p, region: m[2], items }
-			if (m[1] === "quests") S.quests.push(entry); else S.npcs[id] = entry
+			const entry = { id, def, file: p, region: def.region || m[2], items }
+			if (m[1] === "quests") S.quests.push(entry); else if (m[1] === "npcs") S.npcs[id] = entry; else S.calib.push(entry)
 		}
 	}
 	render()
@@ -219,7 +222,8 @@ const audioPath = (it, lang) => TD.speechPath(lang, it.id, it.en)
 const audioOf = (it, lang) => S.tree.get(audioPath(it, lang)) || ""
 const currentOf = (it, lang, kind) => kind === "text" ? textOf(it, lang) : audioOf(it, lang)
 const stateOf = (it, lang, kind) => TD.state(S.fb[fbKey(it, lang, kind)], currentOf(it, lang, kind))
-function cellsOf(it) { return LANGS.flatMap((l) => [[l, "text"], ...(it.voiced ? [[l, "audio"]] : [])]) }
+const langsOf = (it, langs) => it.type === "calibration" ? ["en"] : langs
+function cellsOf(it) { return langsOf(it, LANGS).flatMap((l) => [[l, "text"], ...(it.voiced ? [[l, "audio"]] : [])]) }
 // Per quest or NPC: how many parts (each text or voice, per language) carry a current
 // rating, their average, and how many are open (rated 6 or lower, noted or flagged).
 function summary(items) {
@@ -287,8 +291,8 @@ function counts(e) {
 }
 
 function renderList() {
-	const entries = S.tab === "quests" ? S.quests : Object.values(S.npcs).filter((n) => n.items.some((i) => i.voiced))
-	let html = `<div class="tabs"><button data-tab="quests" aria-pressed="${S.tab === "quests"}">Quests</button><button data-tab="npcs" aria-pressed="${S.tab === "npcs"}">Voiced NPCs</button></div>
+	const entries = S.tab === "quests" ? S.quests : S.tab === "calibration" ? S.calib : Object.values(S.npcs).filter((n) => n.items.some((i) => i.voiced))
+	let html = `<div class="tabs"><button data-tab="quests" aria-pressed="${S.tab === "quests"}">Quests</button><button data-tab="npcs" aria-pressed="${S.tab === "npcs"}">Voiced NPCs</button>${S.calib.length ? `<button data-tab="calibration" aria-pressed="${S.tab === "calibration"}">Calibration</button>` : ""}</div>
 		<input id="search" type="search" placeholder="Search text in English or German" value="${esc(S.q)}">
 		<div class="filters">${Object.entries(FILTERS).map(([v, [t]]) => `<button data-filter="${v}" aria-pressed="${S.filter === v}">${t}</button>`).join("")}</div>
 		<select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([v, [t]]) => `<option value="${v}" ${S.sort === v ? "selected" : ""}>${t}</option>`).join("")}</select>`
@@ -330,7 +334,7 @@ function rater(it, lang, kind) {
 }
 
 function lineHtml(it) {
-	const cells = S.langs.map((lang) => {
+	const cells = langsOf(it, S.langs).map((lang) => {
 		const ek = it.key + "|" + lang, pend = S.edits.get(ek), cur = textOf(it, lang)
 		const voice = it.voiced ? `<div class="voice">${audioOf(it, lang)
 			? `<button class="play" data-play="${esc(audioPath(it, lang))}">${playLabel(audioPath(it, lang))}</button>`
@@ -343,11 +347,14 @@ function lineHtml(it) {
 }
 
 function renderDetail() {
-	const entry = S.tab === "quests" ? S.quests.find((q) => q.id === S.sel) : S.npcs[S.sel]
+	const entry = S.tab === "npcs" ? S.npcs[S.sel] : (S.tab === "quests" ? S.quests : S.calib).find((q) => q.id === S.sel)
 	if (!entry) { $("#detail").innerHTML = '<p class="meta">Pick a quest or an NPC on the left.</p>'; return }
 	const d = entry.def
 	let html = '<button class="back" data-back="1">← List</button>'
-	if (S.tab === "quests") {
+	if (S.tab === "calibration") {
+		html += `<h2>${esc(d.name)}</h2><p>${esc(d.context)}</p><div class="meta">The same line in ${entry.items.length} versions, in no particular order. Rate each one, and edit one if you know a better way to say it.</div>`
+			+ entry.items.map(lineHtml).join("")
+	} else if (S.tab === "quests") {
 		html += `<h2>${esc(d.name)}</h2><div class="meta">Level ${esc(d.level)} · ${esc(entry.region.replace(/_/g, " "))}${d.giver ? " · from " + esc(npcName(d.giver)) : ""}${d.turn_in ? " · hand in to " + esc(npcName(d.turn_in)) : ""}</div>`
 		const s = summary(partsOf(entry))
 		html += `<div class="meta">${counts(entry)} rated${s.avg != null ? " · average " + s.avg.toFixed(1) : ""}${s.open ? " · " + s.open + " to rework" : ""}</div>`
@@ -550,7 +557,7 @@ document.addEventListener("toggle", (ev) => {
 	if (n) ev.target.open ? S.openNpcs.add(n) : S.openNpcs.delete(n)
 }, true)
 addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size) e.preventDefault() })
-const h = location.hash.slice(1).match(/^(quests|npcs)-(.+)$/)
+const h = location.hash.slice(1).match(/^(quests|npcs|calibration)-(.+)$/)
 if (h) { S.tab = h[1]; S.sel = h[2]; $("#main").dataset.view = "detail" }
 if (!S.token) notice(`<div class="card"><h2>Text Desk</h2><p>Read, edit and rate the game's quest text and voice lines. Your edits and ratings are saved to the ${BRANCH} branch.</p>${tokenForm()}</div>`)
 else load().catch(showError)
