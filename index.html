@@ -83,6 +83,7 @@ details { font-size: 13px; color: var(--muted) }
 details ul { margin: 4px 0 0; padding-left: 18px }
 .voice { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
 .play { min-width: 64px }
+.anchor[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent) }
 .saybar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
 	background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; justify-content: flex-end; z-index: 3 }
 .card { max-width: 560px; margin: 40px auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 10px }
@@ -123,6 +124,8 @@ const OWNER = "multa-notitia", REPO = "Project-Mystery", BRANCH = "text-review",
 const FB = "feedback/text_reviews.json"
 // Versions of the same lines written in different styles, rated to pin down the voice (README).
 const CAL = "feedback/calibration.json"
+// The clip each voice is matched to when recording, {voice: {lang: speech path}} (tools/audio/record_speech.py).
+const ANCHORS = "feedback/voice_anchors.json"
 const LANGS = ["en", "de"]
 const VOICED = ["greeting", "hail", "idle_lines"]
 const NAMES = { name: "Name", title: "Title", text: "Text", progress: "Progress", completion: "Completion", ready_hint: "Ready hint",
@@ -135,7 +138,7 @@ const S = {
 	token: store.get("td_token") || "",
 	head: "", tree: new Map(), files: {}, fb: {},
 	items: new Map(), quests: [], npcs: {}, calib: [], de: new Map(),
-	edits: new Map(), rates: new Map(),
+	edits: new Map(), rates: new Map(), anchors: new Map(),
 	tab: "quests", filter: store.get("td_filter") || "all", sort: store.get("td_sort") || "story", q: "", sel: "", openNpcs: new Set(),
 	langs: (store.get("td_langs") || "en,de").split(","),
 }
@@ -176,7 +179,7 @@ async function load() {
 	const tree = await gh("/git/trees/" + commit.tree.sha + "?recursive=1")
 	// ponytail: one recursive tree call; GitHub truncates past 100k files, far above this repo's ~10k.
 	S.tree = new Map(tree.tree.filter((t) => t.type === "blob").map((t) => [t.path, t.sha]))
-	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB || p === CAL)
+	const want = [...S.tree.keys()].filter((p) => /^data\/(quests|npcs|locales\/de)\/[^/]+\.json$/.test(p) || p === "scripts/autoload/loc.gd" || p === FB || p === CAL || p === ANCHORS)
 	const texts = await Promise.all(want.map((p) => blobText(S.tree.get(p))))
 	S.files = Object.fromEntries(want.map((p, i) => [p, texts[i]]))
 	if (!S.sel) $("#main").dataset.view = "list"
@@ -187,6 +190,7 @@ function build() {
 	const loc = S.files["scripts/autoload/loc.gd"]
 	S.keys = new Set(loc.match(/const TEXT_KEYS := \[(.*?)\]/s)[1].match(/"[^"]*"/g).map((s) => JSON.parse(s)))
 	S.fb = S.files[FB] ? JSON.parse(S.files[FB]) : {}
+	S.anchored = S.files[ANCHORS] ? JSON.parse(S.files[ANCHORS]) : {}
 	S.de = new Map()
 	S.items = new Map(); S.quests = []; S.npcs = {}; S.calib = []
 	for (const [p, src] of Object.entries(S.files)) {
@@ -212,13 +216,28 @@ function build() {
 			if (m[1] === "quests") S.quests.push(entry); else if (m[1] === "npcs") S.npcs[id] = entry; else S.calib.push(entry)
 		}
 	}
+	// Quest text is voiced by the NPC who says it, as Quests.speaker_of picks: the giver
+	// says the offer, the turn-in NPC (or the giver) the progress and completion.
+	for (const q of S.quests) for (const it of q.items) {
+		const key = it.path[0], giver = q.def.giver
+		if (!giver || !["text", "progress", "completion"].includes(key)) continue
+		it.npc = key === "text" ? giver : q.def.turn_in || giver
+		it.voiced = !!S.npcs[it.npc]?.def.speaker
+	}
 	render()
 }
 
 // ---- What is current, and its rating state
 const fbKey = (it, lang, kind) => it.key + "|" + lang + "|" + kind
 const textOf = (it, lang) => lang === "en" ? it.en : S.de.get(it.en)?.value ?? ""
-const audioPath = (it, lang) => TD.speechPath(lang, it.id, it.en)
+const audioPath = (it, lang) => TD.speechPath(lang, it.npc || it.id, it.en)
+// The NPC whose voice a line is recorded with: the speaker, or the NPC its "speaker" names.
+const voiceOf = (id) => S.npcs[S.npcs[id]?.def.speaker] ? S.npcs[id].def.speaker : id
+// A voice's anchor clip: picked here, else its first recorded line, as record_speech.py falls back.
+function anchorOf(voice, lang) {
+	const first = S.npcs[voice]?.items.find((i) => i.voiced && S.tree.has(audioPath(i, lang)))
+	return S.anchors.get(voice + "|" + lang) ?? S.anchored[voice]?.[lang] ?? (first ? audioPath(first, lang) : "")
+}
 const audioOf = (it, lang) => S.tree.get(audioPath(it, lang)) || ""
 const currentOf = (it, lang, kind) => kind === "text" ? textOf(it, lang) : audioOf(it, lang)
 const stateOf = (it, lang, kind) => TD.state(S.fb[fbKey(it, lang, kind)], currentOf(it, lang, kind))
@@ -337,13 +356,19 @@ function lineHtml(it) {
 	const cells = langsOf(it, S.langs).map((lang) => {
 		const ek = it.key + "|" + lang, pend = S.edits.get(ek), cur = textOf(it, lang)
 		const voice = it.voiced ? `<div class="voice">${audioOf(it, lang)
-			? `<button class="play" data-play="${esc(audioPath(it, lang))}">${playLabel(audioPath(it, lang))}</button>`
+			? `<button class="play" data-play="${esc(audioPath(it, lang))}">${playLabel(audioPath(it, lang))}</button>${anchorButton(it, lang)}`
 			: '<span class="meta">Not recorded yet</span>'}</div>${rater(it, lang, "audio")}` : ""
 		return `<div class="cell ${pend ? "dirty" : ""}"><div class="lang">${lang.toUpperCase()}${lang === "de" && !cur ? ' <span class="meta">no translation yet</span>' : ""}</div>
 			<textarea data-edit="${esc(ek)}" class="${cur ? "" : "missing"}" rows="${Math.min(8, Math.ceil(((pend?.text ?? cur).length || 1) / 60) + 1)}">${esc(pend ? pend.text : cur)}</textarea>
 			${rater(it, lang, "text")}${voice}</div>`
 	}).join("")
 	return `<div class="line"><div class="lab">${esc(labelOf(it.path))}</div><div class="cells">${cells}</div></div>`
+}
+
+function anchorButton(it, lang) {
+	const voice = voiceOf(it.npc || it.id), on = anchorOf(voice, lang) === audioPath(it, lang)
+	return ` <button class="anchor" data-anchor="${esc(voice + "|" + lang)}" data-path="${esc(audioPath(it, lang))}" aria-pressed="${on}"
+		title="Every new line of this voice is recorded to sound like its anchor">${on ? "Voice anchor" : "Make voice anchor"}</button>`
 }
 
 function renderDetail() {
@@ -384,7 +409,7 @@ function npcSection(n, all, role) {
 }
 
 function renderSavebar() {
-	const n = S.edits.size + S.rates.size
+	const n = S.edits.size + S.rates.size + S.anchors.size
 	$("#savebar").hidden = !n
 	$("#pendinginfo").textContent = n + (n === 1 ? " unsaved change" : " unsaved changes")
 }
@@ -410,7 +435,7 @@ async function save() {
 			if (de && !S.de.has(text)) for (const f of de.files) op(f, (src) => TD.setEntry(src, text, de.value))
 			if (de) fbOps.push((fb) => TD.flag(fb, fbKey(it, "de", "text"), S.de.get(text)?.value ?? de.value, "English changed"))
 			if (it.voiced) for (const l of LANGS) {
-				const sha = S.tree.get(TD.speechPath(l, it.id, text)) || ""
+				const sha = S.tree.get(TD.speechPath(l, it.npc || it.id, text)) || ""
 				fbOps.push((fb) => TD.flag(fb, fbKey(it, l, "audio"), sha, "Text changed, record again"))
 			}
 		} else {
@@ -418,7 +443,7 @@ async function save() {
 			const files = S.de.get(en)?.files || S.de.get(it.en)?.files || ["data/locales/de/" + it.region + ".json"]
 			for (const f of files) op(f, (src) => TD.setEntry(src, en, text))
 			fbOps.push((fb) => TD.edited(fb, fbKey(it, "de", "text"), was, at))
-			if (it.voiced) fbOps.push((fb) => TD.flag(fb, fbKey(it, "de", "audio"), S.tree.get(TD.speechPath("de", it.id, en)) || "", "Text changed, record again"))
+			if (it.voiced) fbOps.push((fb) => TD.flag(fb, fbKey(it, "de", "audio"), S.tree.get(TD.speechPath("de", it.npc || it.id, en)) || "", "Text changed, record again"))
 		}
 	}
 	for (const [k, r] of S.rates) {
@@ -428,7 +453,13 @@ async function save() {
 		fbOps.push((fb) => TD.rate(fb, k, current, r.rating, r.note, at))
 	}
 	if (fbOps.length) op(FB, (src) => { const fb = src.trim() ? JSON.parse(src) : {}; fbOps.forEach((f) => f(fb)); return JSON.stringify(fb, null, "\t") + "\n" })
-	const what = [S.edits.size && S.edits.size + " edit" + (S.edits.size > 1 ? "s" : ""), S.rates.size && S.rates.size + " rating" + (S.rates.size > 1 ? "s" : "")].filter(Boolean).join(", ")
+	if (S.anchors.size) op(ANCHORS, (src) => {
+		const a = src.trim() ? JSON.parse(src) : {}
+		for (const [k, p] of S.anchors) { const [voice, lang] = k.split("|"); (a[voice] ||= {})[lang] = p }
+		return JSON.stringify(a, null, "\t") + "\n"
+	})
+	const what = [S.edits.size && S.edits.size + " edit" + (S.edits.size > 1 ? "s" : ""), S.rates.size && S.rates.size + " rating" + (S.rates.size > 1 ? "s" : ""),
+		S.anchors.size && S.anchors.size + " voice anchor" + (S.anchors.size > 1 ? "s" : "")].filter(Boolean).join(", ")
 	for (let attempt = 0; ; attempt++) {
 		// First try on top of what this page last saw or saved; only re-read the branch when
 		// GitHub says it has moved (another device saved, or a Claude rework landed).
@@ -451,7 +482,7 @@ async function save() {
 		if (attempt === 3) throw new Error("GitHub refused the save four times: " + (await r.text()).slice(0, 160))
 		await new Promise((ok) => setTimeout(ok, 1000 * (attempt + 1)))
 	}
-	S.edits.clear(); S.rates.clear()
+	S.edits.clear(); S.rates.clear(); S.anchors.clear()
 	build()
 }
 
@@ -475,12 +506,17 @@ document.addEventListener("click", async (ev) => {
 		unchanged ? S.rates.delete(k) : S.rates.set(k, p)
 		renderDetail(); renderSavebar()
 	} else if (d.play) play(b, d.play)
+	else if (d.anchor) {
+		const [voice, lang] = d.anchor.split("|")
+		S.anchored[voice]?.[lang] === d.path ? S.anchors.delete(d.anchor) : S.anchors.set(d.anchor, d.path)
+		renderDetail(); renderSavebar()
+	}
 	else if (b.id === "save") {
 		b.disabled = true; b.textContent = "Saving…"
 		try { await save() } catch (e) { $("#pendinginfo").innerHTML = '<span class="err">' + esc(e.message) + "</span>" }
 		b.disabled = false; b.textContent = "Save"
-	} else if (b.id === "discard") { S.edits.clear(); S.rates.clear(); render() }
-	else if (b.id === "reload") { if (S.edits.size + S.rates.size) { $("#pendinginfo").textContent = "Save or discard your changes first."; return } load().catch(showError) }
+	} else if (b.id === "discard") { S.edits.clear(); S.rates.clear(); S.anchors.clear(); render() }
+	else if (b.id === "reload") { if (S.edits.size + S.rates.size + S.anchors.size) { $("#pendinginfo").textContent = "Save or discard your changes first."; return } load().catch(showError) }
 	else if (b.id === "nudge") {
 		try { await navigator.clipboard.writeText("check text feedback"); b.textContent = "Copied" } catch { b.textContent = "Say: check text feedback" }
 		setTimeout(() => (b.textContent = "Copy nudge"), 2500)
@@ -556,7 +592,7 @@ document.addEventListener("toggle", (ev) => {
 	const n = ev.target.dataset?.npc
 	if (n) ev.target.open ? S.openNpcs.add(n) : S.openNpcs.delete(n)
 }, true)
-addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size) e.preventDefault() })
+addEventListener("beforeunload", (e) => { if (S.edits.size + S.rates.size + S.anchors.size) e.preventDefault() })
 const h = location.hash.slice(1).match(/^(quests|npcs|calibration)-(.+)$/)
 if (h) { S.tab = h[1]; S.sel = h[2]; $("#main").dataset.view = "detail" }
 if (!S.token) notice(`<div class="card"><h2>Text Desk</h2><p>Read, edit and rate the game's quest text and voice lines. Your edits and ratings are saved to the ${BRANCH} branch.</p>${tokenForm()}</div>`)
